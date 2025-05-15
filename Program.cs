@@ -1,4 +1,10 @@
-﻿using static Calculator.SyntaxTree;
+﻿using System;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Xml.Linq;
+using static Calculator.SyntaxTree;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Calculator
 {
@@ -12,10 +18,10 @@ namespace Calculator
                 str ??= "0";
                 if (!CheckBrackets(str)) { Console.WriteLine("Closing bracket expected"); continue; }
                 if (str == "exit" || str == "quit" || str == "q") break;
-                //str = "3 + sqrt 14 ^ 2 * (2 - 1)";
+                //str = "3 + ln 14 ^ 2 * (2 - 1) + integral("2*xdx", 1, 2)";
                 try
                 {
-                    Console.WriteLine(Calculate(str));
+                    Console.WriteLine(Calculate(str, true));
                 }
                 catch (Exception ex) { Console.WriteLine(ex.Message); }
             }
@@ -25,7 +31,7 @@ namespace Calculator
         {
             var lexer = new Lexer(str);
             var parser = new Parser(lexer);
-            AstNode tree = parser.Expr();
+            Node tree = parser.Expr();
             if(pritSyntaxTree) tree.Print();
             var evaluator = new Evaluator();
             double result = evaluator.Evaluate(tree);
@@ -89,7 +95,11 @@ namespace Calculator
             Tan,
             Ctan,
             DivisionMod,
-            MathMod
+            MathMod,
+            Comma,
+            Identifier,
+            String,
+            End,
         }
         public enum Associativity
         {
@@ -153,6 +163,8 @@ namespace Calculator
             private readonly Dictionary<TokenType, Func<double, double, double, double>> _tetraryOps;
             private readonly Dictionary<TokenType, Func<double, double, double>> _binaryOps;
             private readonly Dictionary<TokenType, Func<double, double>> _unaryOps;
+            private readonly Dictionary<string, Func<List<Node>, double>> _functions;
+
             public Evaluator()
             {
                 _binaryOps = new Dictionary<TokenType, Func<double, double, double>>
@@ -178,35 +190,95 @@ namespace Calculator
                     [TokenType.Ctan] = Math.Atan,
                     [TokenType.MathMod] = (a) => (a<0 ? 0-a : a)
                 };
+                _functions = new Dictionary<string, Func<List<Node>, double>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["max"] = args => Math.Max(Evaluate(args[0]), Evaluate(args[1])),
+                    ["min"] = args => Math.Min(Evaluate(args[0]), Evaluate(args[1])),
+                    ["abs"] = args => Math.Abs(Evaluate(args[0])),
+                    ["clamp"] = args => Math.Clamp(Evaluate(args[0]), Evaluate(args[1]), Evaluate(args[2])),
+                    ["integral"] = args =>
+                    {
+                        if (args[0] is not StringNode sn)
+                            throw new Exception("First argument to integral must be a string");
+                        var a = Evaluate(args[1]);
+                        var b = Evaluate(args[2]);
+                        return Integral(sn.Value, a, b);
+                    }
 
-        }
+                };
+            }
 
-        public double Evaluate(AstNode node)
+            public double Evaluate(Node node, Dictionary<string, double>? variables = null)
             {
                 switch (node)
                 {
                     case UnaryOpNode un:
-                        var operand = Evaluate(un.Operand);
+                        var operand = Evaluate(un.Operand, variables);
                         if (_unaryOps.TryGetValue(un.Op.Type, out var uop))
                             return uop(operand);
                         else
                             throw new Exception($"Unknown unary operator: {un.Op.Type}");
+                    case VariableNode varNode:
+                        if (variables is null) throw new Exception($"No variables initialized");
+                        else if (variables.TryGetValue(varNode.Name, out var val))
+                            return val;
+                        throw new Exception($"Unknown variable: {varNode.Name}");
 
+                    case StringNode sn:
+                        throw new Exception("Cannot evaluate string as number");
                     case NumberNode num:
                         return double.Parse(num.Value);
 
                     case BinOpNode bin:
-                        var left = Evaluate(bin.Left);
-                        var right = Evaluate(bin.Right);
+                        var left = Evaluate(bin.Left, variables);
+                        var right = Evaluate(bin.Right, variables);
 
                         if (_binaryOps.TryGetValue(bin.Op.Type, out var op))
                             return op(left, right);
                         else
                             throw new Exception($"Unknown binary operator: {bin.Op.Type}");
+                    case FunctionNode func:
+                        if (_functions.TryGetValue(func.Name, out var fn))
+                            return fn(func.Arguments);
+                        else
+                            throw new Exception($"Unknown function: {func.Name}");
+
+
+
 
                     default:
                         throw new Exception($"Unsupported node: {node.GetType().Name}");
                 }
+            }
+            private double Integral(string function, double a, double b, uint steps = 10000)
+            {
+                string varName = "x";
+                if (function.Contains("d"))
+                {
+                    var index = function.IndexOf("d");
+                    if (function.Length > index + 1)
+                    {
+                        varName = (function[index + 1]).ToString();
+                        function = function.Replace("d" + varName, "");
+                    }
+                }
+                var lexer = new Lexer(function);
+                var parser = new Parser(lexer);
+                Node tree = parser.Expr();
+                
+                double stepSize = (b - a) / steps;
+                double sum = 0;
+                
+                for (int i = 0; i < steps; i++)
+                {
+                    double x = a + i * stepSize;
+
+                    var variables = new Dictionary<string, double> { [varName] = x };
+                    double fx = Evaluate(tree, variables);
+                    sum += fx * stepSize;
+                }
+                return Math.Round(sum, 3);
+
             }
         }
 
@@ -283,61 +355,6 @@ namespace Calculator
                     }
 
                     if (char.IsDigit(_currentChar)) return Number();
-                    if (_currentChar == '=' && Peek() == '=')
-                    {
-                        Advance(); Advance();
-                        return new Token(TokenType.Equal);
-                    }
-                    if (_currentChar == '+' && Peek() == '+')
-                    {
-                        Advance(); Advance();
-                        return new Token(TokenType.Increment);
-                    }
-                    if (_currentChar == '-' && Peek() == '-')
-                    {
-                        Advance(); Advance();
-                        return new Token(TokenType.Decrement);
-                    }
-                    if (MatchAhead("sqrt"))
-                    {
-                        for (int i = 0; i < 4; i++) Advance();
-                        return new Token(TokenType.Sqrt);
-                    }
-                    if (MatchAhead("log"))
-                    {
-                        for (int i = 0; i < 3; i++) Advance();
-                        return new Token(TokenType.Log);
-                    }
-                    if (MatchAhead("ln"))
-                    {
-                        for (int i = 0; i < 2; i++) Advance();
-                        return new Token(TokenType.NaturalLog);
-                    }
-                    if (MatchAhead("sin"))
-                    {
-                        for (int i = 0; i < 3; i++) Advance();
-                        return new Token(TokenType.Sin);
-                    }
-                    if (MatchAhead("cos"))
-                    {
-                        for (int i = 0; i < 3; i++) Advance();
-                        return new Token(TokenType.Cos);
-                    }
-                    if (MatchAhead("tg"))
-                    {
-                        for (int i = 0; i < 2; i++) Advance();
-                        return new Token(TokenType.Tan);
-                    }
-                    if (MatchAhead("ctg"))
-                    {
-                        for (int i = 0; i < 3; i++) Advance();
-                        return new Token(TokenType.Ctan);
-                    }
-                    if (MatchAhead("mod"))
-                    {
-                        for (int i = 0; i < 3; i++) Advance();
-                        return new Token(TokenType.MathMod);
-                    }
                     switch (_currentChar)
                     {
                         case '+': Advance(); return new Token(TokenType.Plus);
@@ -348,7 +365,71 @@ namespace Calculator
                         case ')': Advance(); return new Token(TokenType.RParen);
                         case '^': Advance(); return new Token(TokenType.Pow);
                         case '%': Advance(); return new Token(TokenType.DivisionMod);
+                        case ',': Advance(); return new Token(TokenType.Comma);
                     }
+                    if (MatchAhead("=="))
+                    {
+                        for (int i = 0; i < 2; i++) Advance();
+                        return new Token(TokenType.Equal);
+                    }
+                    if (MatchAhead("!="))
+                    {
+                        for (int i = 0; i < 2; i++) Advance();
+                        return new Token(TokenType.NotEqual);
+                    }
+                    if (MatchAhead("++"))
+                    {
+                        for (int i = 0; i < 2; i++) Advance();
+                        return new Token(TokenType.Increment);
+                    }
+                    if (MatchAhead("--"))
+                    {
+                        for (int i = 0; i < 2; i++) Advance();
+                        return new Token(TokenType.Decrement);
+                    }
+                    if (_currentChar == '"')
+                    {
+                        Advance();
+                        var sb = new StringBuilder();
+                        while (_currentChar != '\0' && _currentChar != '"')
+                        {
+                            sb.Append(_currentChar);
+                            Advance();
+                        }
+
+                        if (_currentChar != '"')
+                            throw new Exception("Unterminated string literal");
+
+                        Advance();
+                        return new Token(TokenType.String, sb.ToString());
+                    }
+
+                    if (char.IsLetter(_currentChar))
+                    {
+                        
+                        string ident = "";
+                        while (char.IsLetter(_currentChar))
+                        {
+                            ident += _currentChar;
+                            Advance();
+                        }
+
+                        return ident switch
+                        {
+                            "sqrt" => new Token(TokenType.Sqrt),
+                            "log" => new Token(TokenType.Log),
+                            "ln" => new Token(TokenType.NaturalLog),
+                            "sin" => new Token(TokenType.Sin),
+                            "cos" => new Token(TokenType.Cos),
+                            "tg" => new Token(TokenType.Tan),
+                            "ctg" => new Token(TokenType.Ctan),
+                            "mod" => new Token(TokenType.MathMod),
+                            _ => new Token(TokenType.Identifier, ident)
+                        };
+
+                    }
+
+                    
 
                     throw new Exception($"Unknown character: {_currentChar}");
                 }
@@ -356,12 +437,14 @@ namespace Calculator
                 return new Token(TokenType.EOF);
             }
         }
-        public abstract class AstNode
+        public abstract class Node
         {
             public abstract void Print(string indent = "", bool isLast = true);
+            public abstract string ToExpressionString();
+
         }
 
-        public class NumberNode : AstNode
+        public class NumberNode : Node
         {
             public string Value { get; }
 
@@ -371,13 +454,69 @@ namespace Calculator
             {
                 Console.WriteLine($"{indent}└── {Value}");
             }
+            public override string ToExpressionString() => Value;
+
         }
-        public class UnaryOpNode : AstNode
+        public class StringNode : Node
+        {
+            public string Value { get; }
+
+            public StringNode(string value)
+            {
+                Value = value;
+            }
+            public override void Print(string indent = "", bool isLast = true)
+            {
+                Console.WriteLine($"{indent}└── {Value}");
+            }
+            public override string ToExpressionString() => Value;
+        }
+        public class VariableNode : Node
+        {
+            public string Name { get; }
+            public Node? Value { get; }
+            public VariableNode(string name)
+            {
+                Name = name;
+            }
+            public override void Print(string indent = "", bool isLast = true)
+            {
+                Console.WriteLine($"{indent}└── var {Name}");
+            }
+            public override string ToExpressionString() => Name;
+        }
+
+        public class FunctionNode : Node
+        {
+            public string Name { get; }
+            public List<Node> Arguments { get; }
+
+            public FunctionNode(string name, List<Node> arguments)
+            {
+                Name = name;
+                Arguments = arguments;
+            }
+
+            public override void Print(string indent = "", bool isLast = true)
+            {
+                Console.WriteLine($"{indent}└── Func: {Name}");
+                string childIndent = indent + (isLast ? "    " : "│   ");
+                for (int i = 0; i < Arguments.Count; i++)
+                    Arguments[i].Print(childIndent, i == Arguments.Count - 1);
+            }
+            public override string ToExpressionString()
+            {
+                var argsStr = string.Join(", ", Arguments.Select(a => a.ToExpressionString()));
+                return $"{Name}({argsStr})";
+            }
+
+        }
+        public class UnaryOpNode : Node
         {
             public Token Op { get; }
-            public AstNode Operand { get; }
+            public Node Operand { get; }
 
-            public UnaryOpNode(Token op, AstNode operand)
+            public UnaryOpNode(Token op, Node operand)
             {
                 Op = op;
                 Operand = operand;
@@ -388,14 +527,24 @@ namespace Calculator
                 string childIndent = indent + (isLast ? "    " : "│   ");
                 Operand.Print(childIndent, true);
             }
-        }
-        public class BinOpNode : AstNode
-        {
-            public AstNode Left { get; }
-            public Token Op { get; }
-            public AstNode Right { get; }
+            public override string ToExpressionString()
+            {
+                return Op.Type switch
+                {
+                    TokenType.MinusUnary or TokenType.Minus => "-" + Operand.ToExpressionString(),
+                    TokenType.Plus => "+" + Operand.ToExpressionString(),
+                    _ => $"{Op.Type}({Operand.ToExpressionString()})"
+                };
+            }
 
-            public BinOpNode(AstNode left, Token op, AstNode right)
+        }
+        public class BinOpNode : Node
+        {
+            public Node Left { get; }
+            public Token Op { get; }
+            public Node Right { get; }
+
+            public BinOpNode(Node left, Token op, Node right)
             {
                 Left = left;
                 Op = op;
@@ -409,6 +558,11 @@ namespace Calculator
                 Left.Print(childIndent, false);
                 Right.Print(childIndent, true);
             }
+            public override string ToExpressionString()
+            {
+                return $"({Left.ToExpressionString()} {(Op.Type)} {Right.ToExpressionString()})";
+            }
+
         }
         public class Parser
         {
@@ -428,7 +582,7 @@ namespace Calculator
                 else
                     throw new Exception($"Expected {type} got {_currentToken.Type}");
             }
-            private AstNode ParseBinary(int minPrecedence, Func<AstNode> parseOperand)
+            private Node ParseBinary(int minPrecedence, Func<Node> parseOperand)
             {
                 var left = parseOperand();
 
@@ -451,8 +605,35 @@ namespace Calculator
 
                 return left;
             }
-            private AstNode Factor()
+            private Node Factor()
             {
+                if (_currentToken.Type == TokenType.Identifier)
+                {
+                    var funcName = _currentToken.Value;
+                    Eat(TokenType.Identifier);
+
+                    if (_currentToken.Type == TokenType.LParen)
+                    {
+                        Eat(TokenType.LParen);
+                        var args = new List<Node>();
+
+                        if (_currentToken.Type != TokenType.RParen)
+                        {
+                            args.Add(Expr());
+                            while (_currentToken.Type == TokenType.Comma)
+                            {
+                                Eat(TokenType.Comma);
+                                args.Add(Expr());
+                            }
+                        }
+
+                        Eat(TokenType.RParen);
+                        return new FunctionNode(funcName, args);
+                    }
+                    return new VariableNode(funcName);
+                    //throw new Exception($"Unexpected token after identifier '{funcName}' — expected '('");
+                }
+
                 if (OperatorTable.UnaryOperators.Contains(_currentToken.Type))
                 {
                     var opToken = _currentToken;
@@ -483,11 +664,16 @@ namespace Calculator
                     Eat(TokenType.RParen);
                     return node;
                 }
-
+                if (_currentToken.Type == TokenType.String)
+                {
+                    var token = _currentToken;
+                    Eat(TokenType.String);
+                    return new StringNode(token.Value);
+                }
                 throw new Exception($"Unexpected token: {_currentToken.Type}");
             }
 
-            public AstNode Expr()
+            public Node Expr()
             {
                 return ParseBinary(0, Factor);
             }
