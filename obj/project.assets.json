@@ -112,11 +112,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\equmag\\source\\repos\\Calculator\\Calculator.csproj",
+      "projectUniqueName": "C:\\Users\\equmag\\Documents\\GitHub\\Syntax-Tree-Calculator\\Calculator.csproj",
       "projectName": "Calculator",
-      "projectPath": "C:\\Users\\equmag\\source\\repos\\Calculator\\Calculator.csproj",
+      "projectPath": "C:\\Users\\equmag\\Documents\\GitHub\\Syntax-Tree-Calculator\\Calculator.csproj",
       "packagesPath": "C:\\Users\\equmag\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\equmag\\source\\repos\\Calculator\\obj\\",
+      "outputPath": "C:\\Users\\equmag\\Documents\\GitHub\\Syntax-Tree-Calculator\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "E:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

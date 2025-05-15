@@ -29,7 +29,7 @@ namespace Calculator
             if(pritSyntaxTree) tree.Print();
             var evaluator = new Evaluator();
             double result = evaluator.Evaluate(tree);
-            return result;
+            return Math.Round(result, 10);
         }
         public static bool CheckBrackets(string input)
         {
@@ -254,11 +254,21 @@ namespace Calculator
             private Token Number()
             {
                 string result = "";
-                while (char.IsDigit(_currentChar))
+                bool hasDot = false;
+
+                while (char.IsDigit(_currentChar) || _currentChar == '.')
                 {
+                    if (_currentChar == '.')
+                    {
+                        if (hasDot) break;
+                        hasDot = true;
+                    }
                     result += _currentChar;
                     Advance();
                 }
+
+                if (result == "." || result == "") throw new Exception("Invalid number format");
+
                 return new Token(TokenType.Number, result);
             }
 
